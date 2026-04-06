@@ -1,0 +1,36 @@
+package software.amazon.kinesis.application.config;
+
+import java.util.Collections;
+import java.util.List;
+
+import software.amazon.awssdk.arns.Arn;
+import software.amazon.awssdk.http.Protocol;
+
+/**
+ * Config for a polling consumer with HTTP protocol of HTTP1
+ */
+public class ReleaseCanaryPollingH1TestConfig extends KCLAppConfig {
+
+    private final String applicationName = "PollingH1Test";
+    private final String streamName = "PollingH1TestStream";
+
+    @Override
+    public String getTestName() {
+        return applicationName;
+    }
+
+    @Override
+    public List<Arn> getStreamArns() {
+        return Collections.singletonList(buildStreamArn(streamName));
+    }
+
+    @Override
+    public Protocol getKinesisClientProtocol() {
+        return Protocol.HTTP1_1;
+    }
+
+    @Override
+    public RetrievalMode getRetrievalMode() {
+        return RetrievalMode.POLLING;
+    }
+}

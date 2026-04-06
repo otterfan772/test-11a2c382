@@ -1,0 +1,253 @@
+/*
+ * Copyright 2019 Amazon.com, Inc. or its affiliates.
+ * Licensed under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package software.amazon.kinesis.retrieval.polling;
+
+import java.time.Duration;
+import java.util.Optional;
+import java.util.function.Function;
+
+import com.google.common.annotations.VisibleForTesting;
+import lombok.AccessLevel;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NonNull;
+import lombok.Setter;
+import lombok.ToString;
+import lombok.experimental.Accessors;
+import lombok.extern.slf4j.Slf4j;
+import software.amazon.awssdk.services.kinesis.KinesisAsyncClient;
+import software.amazon.awssdk.services.kinesis.model.GetRecordsRequest;
+import software.amazon.kinesis.retrieval.DataFetcherProviderConfig;
+import software.amazon.kinesis.retrieval.RecordsFetcherFactory;
+import software.amazon.kinesis.retrieval.RetrievalFactory;
+import software.amazon.kinesis.retrieval.RetrievalSpecificConfig;
+
+@Accessors(fluent = true)
+@Getter
+@Setter
+@ToString
+@EqualsAndHashCode
+@Slf4j
+public class PollingConfig implements RetrievalSpecificConfig {
+
+    public static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(30);
+
+    public static final int DEFAULT_MAX_RECORDS = 10000;
+
+    @VisibleForTesting
+    protected static final int DEFAULT_MAX_PENDING_PROCESS_RECORDS_INPUT_LIMIT = 5;
+
+    private static final int DEFAULT_MAX_PENDING_PROCESS_RECORDS_INPUT = 4;
+
+    public static final long MIN_IDLE_MILLIS_BETWEEN_READS = 200L;
+
+    /**
+     * Default value for millisBehindLatestThresholdForReducedTps.
+     * A value of 0 effectively disables the reduced TPS functionality.
+     */
+    public static long DEFAULT_MILLIS_BEHIND_LATEST_THRESHOLD_FOR_REDUCED_TPS = 0L;
+
+    /**
+     * Configurable functional interface to override the existing DataFetcher.
+     */
+    Function<DataFetcherProviderConfig, DataFetcher> dataFetcherProvider;
+    /**
+     * Name of the Kinesis stream.
+     */
+    private String streamName;
+
+    private boolean usePollingConfigIdleTimeValue;
+
+    /**
+     * Millisecond threshold for millisBehindLatest that will trigger reduced throughput when close to tip.
+     * When most recent record has millisBehindLatest less than this threshold, additional sleep time will be added.
+     * Sleep time will be the difference between time of last successful record retrieval and this threshold.
+     * <p>
+     * Default value: 0
+     * </p>
+     */
+    private long millisBehindLatestThresholdForReducedTps = DEFAULT_MILLIS_BEHIND_LATEST_THRESHOLD_FOR_REDUCED_TPS;
+
+    /**
+     * @param kinesisClient Client used to access Kinesis services.
+     */
+    public PollingConfig(KinesisAsyncClient kinesisClient) {
+        this.kinesisClient = kinesisClient;
+    }
+
+    /**
+     * Client used to access to Kinesis service.
+     */
+    @NonNull
+    private final KinesisAsyncClient kinesisClient;
+
+    /**
+     * Max records to fetch from Kinesis in a single GetRecords call.
+     *
+     * <p>
+     * Default value: 10000
+     * </p>
+     */
+    private int maxRecords = DEFAULT_MAX_RECORDS;
+
+    /**
+     * @param streamName    Name of Kinesis stream.
+     * @param kinesisClient Client used to access Kinesis serivces.
+     */
+    public PollingConfig(String streamName, KinesisAsyncClient kinesisClient) {
+        this.kinesisClient = kinesisClient;
+        this.streamName = streamName;
+    }
+
+    /**
+     * The value for how long the ShardConsumer should sleep in between calls to
+     * {@link KinesisAsyncClient#getRecords(GetRecordsRequest)}.
+     *
+     * If this is not set using {@link PollingConfig#idleTimeBetweenReadsInMillis},
+     * it defaults to 1500 ms.
+     *
+     * <p>
+     * Default value: 1500L
+     * </p>
+     */
+    @Setter(AccessLevel.NONE)
+    private long idleTimeBetweenReadsInMillis = 1500L;
+
+    /**
+     * Time to wait in seconds before the worker retries to get a record.
+     *
+     * <p>
+     * Default value: {@link Optional#empty()}
+     * </p>
+     */
+    private Optional<Integer> retryGetRecordsInSeconds = Optional.empty();
+
+    /**
+     * The max number of threads in the records thread pool.
+     *
+     * <p>
+     * Default value: {@link Optional#empty()}
+     * </p>
+     */
+    private Optional<Integer> maxGetRecordsThreadPool = Optional.empty();
+
+    /**
+     * The factory that creates the RecordsPublisher used to records from Kinesis.
+     *
+     * <p>
+     * Default value: {@link SimpleRecordsFetcherFactory}
+     * </p>
+     */
+    private RecordsFetcherFactory recordsFetcherFactory = new SimpleRecordsFetcherFactory();
+
+    /**
+     * The SleepTimeController used to control the sleep time between getRecords calls.
+     *
+     * <p>
+     * Default value: {@link KinesisSleepTimeController}
+     * </p>
+     */
+    private SleepTimeController sleepTimeController = new KinesisSleepTimeController();
+
+    /**
+     * @Deprecated Use {@link PollingConfig#idleTimeBetweenReadsInMillis} instead
+     */
+    @Deprecated
+    public void setIdleTimeBetweenReadsInMillis(long idleTimeBetweenReadsInMillis) {
+        idleTimeBetweenReadsInMillis(idleTimeBetweenReadsInMillis);
+    }
+
+    /**
+     * Set the value for how long the ShardConsumer should sleep in between calls to
+     * {@link KinesisAsyncClient#getRecords(GetRecordsRequest)}. If this is not specified here the value provided in
+     * {@link RecordsFetcherFactory} will be used. Cannot set value below MIN_IDLE_MILLIS_BETWEEN_READS.
+     */
+    public PollingConfig idleTimeBetweenReadsInMillis(long idleTimeBetweenReadsInMillis) {
+        if (idleTimeBetweenReadsInMillis < MIN_IDLE_MILLIS_BETWEEN_READS) {
+            log.warn(
+                    "idleTimeBetweenReadsInMillis must be greater than or equal to {} but current value is {}."
+                            + " Defaulting to minimum {}.",
+                    MIN_IDLE_MILLIS_BETWEEN_READS,
+                    idleTimeBetweenReadsInMillis,
+                    MIN_IDLE_MILLIS_BETWEEN_READS);
+            idleTimeBetweenReadsInMillis = MIN_IDLE_MILLIS_BETWEEN_READS;
+        }
+        usePollingConfigIdleTimeValue = true;
+        this.idleTimeBetweenReadsInMillis = idleTimeBetweenReadsInMillis;
+        return this;
+    }
+
+    public PollingConfig maxRecords(int maxRecords) {
+        if (maxRecords > DEFAULT_MAX_RECORDS) {
+            throw new IllegalArgumentException("maxRecords must be less than or equal to " + DEFAULT_MAX_RECORDS
+                    + " but current value is " + maxRecords());
+        }
+        this.maxRecords = maxRecords;
+        return this;
+    }
+
+    public PollingConfig maxPendingProcessRecordsInput(int maxPendingProcessRecordsInput) {
+        if (maxPendingProcessRecordsInput > DEFAULT_MAX_PENDING_PROCESS_RECORDS_INPUT_LIMIT) {
+            throw new IllegalArgumentException("maxPendingProcessRecordsInput must be less than or equal to "
+                    + DEFAULT_MAX_PENDING_PROCESS_RECORDS_INPUT_LIMIT
+                    + " but current value is " + maxPendingProcessRecordsInput);
+        }
+        this.maxPendingProcessRecordsInput = maxPendingProcessRecordsInput;
+        return this;
+    }
+
+    /**
+     * The maximum number of pending process records input that can be queued.
+     *
+     * <p>
+     * Default value: 4
+     * </p>
+     */
+    private int maxPendingProcessRecordsInput = DEFAULT_MAX_PENDING_PROCESS_RECORDS_INPUT;
+
+    /**
+     * The maximum time to wait for a future request from Kinesis to complete
+     */
+    private Duration kinesisRequestTimeout = DEFAULT_REQUEST_TIMEOUT;
+
+    @Override
+    public RetrievalFactory retrievalFactory() {
+        // Prioritize the PollingConfig specified value if its updated.
+        if (usePollingConfigIdleTimeValue) {
+            recordsFetcherFactory.idleMillisBetweenCalls(idleTimeBetweenReadsInMillis);
+        }
+        recordsFetcherFactory.maxPendingProcessRecordsInput(maxPendingProcessRecordsInput);
+        recordsFetcherFactory.millisBehindLatestThresholdForReducedTps(millisBehindLatestThresholdForReducedTps);
+        return new SynchronousBlockingRetrievalFactory(
+                streamName(),
+                kinesisClient(),
+                recordsFetcherFactory,
+                maxRecords(),
+                kinesisRequestTimeout,
+                dataFetcherProvider,
+                sleepTimeController);
+    }
+
+    @Override
+    public void validateState(final boolean isMultiStream) {
+        if (isMultiStream) {
+            if (streamName() != null) {
+                throw new IllegalArgumentException(
+                        "PollingConfig must not have streamName configured in multi-stream mode");
+            }
+        }
+    }
+}
